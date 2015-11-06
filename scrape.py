@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
 from argparse import ArgumentParser
+from time import sleep
+
+from bs4 import BeautifulSoup
+from requests import get
 
 
-class TranscriptParser:
+class TranscriptScraper:
     """
     URLs for chat pages are of the form:
 
@@ -16,8 +20,9 @@ class TranscriptParser:
 
     Each page contains the following information:
 
+     - "a[rel=next]" contains the next day to fetch
      - ".pager" (if present) contains the links for other pages for the day
-     - "a" after ".current" in ".pager" are remaining page for the day
+     - "a" after ".current" in ".pager" are remaining pages for the day
      - ".monologue" (a block) contains ".signature" and ".messages"
      - ".signature" contains a single link with the user's name in the "title"
        attribute and their user ID in the URL of the link
@@ -33,18 +38,45 @@ class TranscriptParser:
     def __init__(self, args):
         self._args = args
 
-    def parse(self):
-        pass
+    def _next_page(self, s):
+        """
+        Given a copy of the DOM, determine the next page to fetch.
+        """
+        pager = s.find(class_='pager')
+        if pager:
+            sibling = pager.find(class_='current').next_sibling
+            if sibling:
+                return sibling['href']
+        next = s.find('a', rel='next')
+        if next:
+            return next['href']
+
+    def _pages(self):
+        """
+        Continue to yield pages until the end page is reached or an error
+        occurs.
+        """
+        url = self._args.start
+        while True:
+            r = get('http://chat.stackexchange.com{}'.format(url))
+            s = BeautifulSoup(r.text)
+            yield s
+            url = self._next_page(s)
+            if url:
+                if self._args.end.startswith(url):
+                    break
+                else:
+                    sleep(self._args.delay)
+            else:
+                break
+
+    def scrape(self):
+        for p in self._pages():
+            print(p.title.string)
 
 
 if __name__ == '__main__':
     parser = ArgumentParser(description="Scrape information from Stack Exchange chat transcripts")
-    parser.add_argument(
-        'room',
-        metavar='ID',
-        type=int,
-        help="room to scrape",
-    )
     output_group = parser.add_argument_group('output')
     output_group.add_argument(
         '-o', '--output',
@@ -72,12 +104,13 @@ if __name__ == '__main__':
     )
     parser_group.add_argument(
         '-s', '--start',
-        metavar='YYYY-MM-DD',
+        metavar='/transcript/Y/M/D[/H-H]',
+        required=True,
         help="starting date for parsing (inclusive)",
     )
     parser_group.add_argument(
         '-e', '--end',
-        metavar='YYYY-MM-DD',
-        help="ending date for parsing (inclusive)",
+        metavar='/transcript/Y/M/D[/H-H]',
+        help="ending date for parsing (exclusive)",
     )
-    TranscriptParser(parser.parse_args()).parse()
+    TranscriptScraper(parser.parse_args()).scrape()
